@@ -116,7 +116,6 @@ export default {
     },
     onUpdateSubscribe() {
       gen.subscribeUpdate(this.channel, ({data}) => {
-        console.log("data", data)
         this.todos = this.todos.map(i => {
           if (i.id === data.subscribeUpdate.id) {
             i.status = data.subscribeUpdate.status === 'true' ? 'true' : 'false'
@@ -134,7 +133,6 @@ export default {
     },
     async getTodos() {
       const data = await gen.getTodos()
-      console.log("data", data)
       this.todos = [...this.todos, ...data.data.getTodos]
     },
     darkThemeHandler() {
