@@ -4,7 +4,7 @@ import App from './App.vue'
 
 //Amplify
 import { Amplify} from 'aws-amplify';
-import * as gen from './api'
+import * as gen from '../config'
 Amplify.configure(gen.config)
 
 // Vuetify
