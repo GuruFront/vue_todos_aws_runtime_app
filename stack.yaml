@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  AppSyncName:
+    Type: "String"
+    Default: "my-appsync-api test"
+    Description: "Name for the AppSync API"
+Resources:
+  AppSyncApi:
+    Type: "AWS::AppSync::GraphQLApi"
+    Properties:
+      Name: !Ref AppSyncName
+      AuthenticationType: API_KEY
+
+  ApiKey:
+    Type: AWS::AppSync::ApiKey
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+  AppSyncSchema:
+    Type: "AWS::AppSync::GraphQLSchema"
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      Definition: |
+        schema {
+          query: Query
+          mutation: Mutation
+          subscription: Subscription
+        }
+        
+        type Mutation {
+          addTodo(author: String!, data: AWSJSON!): Todo
+          deleteTodo(author: String!, id: ID!): Todo
+          updateTodo(author: String, id: ID!, status: String, title: String): Todo
+        }
+        
+        type Query {
+          getTodos: [Todo]
+        }
+        
+        type Subscription {
+          subscribe(author: String!): Todo @aws_subscribe(mutations : ["addTodo"])
+          subscribeDelete(author: String!): Todo @aws_subscribe(mutations : ["deleteTodo"])
+          subscribeUpdate(author: String!): Todo @aws_subscribe(mutations : ["updateTodo"])
+        }
+        
+        type Todo {
+          author: String!
+          id: ID!
+          status: String!
+          title: String!
+        }
+  DynamoDBRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "DynamoDBRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "dynamodb.amazonaws.com"
+            Action:Action:
+              - "sts:AssumeRole"
+              - "dynamodb:DeleteItem"
+              - "dynamodb:GetItem"
+              - "dynamodb:PutItem"
+              - "dynamodb:Query"
+              - "dynamodb:Scan"
+              - "dynamodb:UpdateItem"
+      Policies:
+        - PolicyName: "DynamoDBPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "dynamodb:*"
+                Resource: "*"
+  DynamoDBTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "Id"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "Id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      TableName: "TodoListTest"
+  NoneDataSource:
+    Type: "AWS::AppSync::DataSource"
+    Properties:
+      Name: "NoneDataSource"
+      Type: "NONE"
+      ApiId: !GetAtt AppSyncApi.ApiId
+  TodoListDataSource:
+    Type: "AWS::AppSync::DataSource"
+    Properties:
+      Name: "TodoListTest"
+      Type: "AMAZON_DYNAMODB"
+      Description: "Data source for the TodoList application"
+      ApiId: !GetAtt AppSyncApi.ApiId
+      ServiceRoleArn: !GetAtt DynamoDBRole.Arn
+      DynamoDBConfig:
+        TableName: "TodoListTest"
+        AwsRegion: "eu-central-1"
+  getTodosResolver:
+    Type: "AWS::AppSync::Resolver"
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      DataSourceName: !GetAtt TodoListDataSource.Name
+      FieldName: getTodos
+      TypeName: Query
+      RequestMappingTemplate: |
+        {
+           "version" : "2017-02-28",
+           "operation" : "Scan"
+        }
+      ResponseMappingTemplate: |
+        $utils.toJson($context.result.items)
+  addTodoResolver:
+    Type: "AWS::AppSync::Resolver"
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      DataSourceName: !GetAtt TodoListDataSource.Name
+      FieldName: addTodo
+      TypeName: Mutation
+      RequestMappingTemplate: |
+        {
+            "version": "2018-05-29",
+            "operation": "PutItem",
+            "key": $util.dynamodb.toMapValues({ "id": $util.autoId() }),
+            "attributeValues": $util.dynamodb.toMapValues({ "id": $util.autoId(), "title": $ctx.args.data.title, "author": $ctx.args.data.author, "status": false })
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($context.result)
+  updateTodoResolver:
+    Type: "AWS::AppSync::Resolver"
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      DataSourceName: !GetAtt TodoListDataSource.Name
+      FieldName: updateTodo
+      TypeName: Mutation
+      RequestMappingTemplate: |
+        #set($input = $util.parseJson($ctx.args.input))
+        #set($id = $input.id)
+        #set($expectedVersion = $input.expectedVersion)
+        #set($values = $input.values)
+          {
+            "version": "2018-05-29",
+            "operation": "UpdateItem",
+            "key": $util.dynamodb.toMapValues({ "id": $id }),
+            "update": {
+              #set($sets = [])
+              #set($removes = [])
+              #set($expressionNames = {})
+              #set($expValues = {})
+              #foreach($keyValue in $values.entrySet())
+              #set($k = $keyValue.key)
+              #set($value = $keyValue.value)
+              #set($expressionNames["#$k"] = $k)
+              #if($value && $value.length())
+                        $sets.add("#$k = :$k")
+                        $expValues.put(":$k", $util.dynamodb.toDynamoDBJson($value))
+              #else
+                        $removes.add("#$k")
+              #end
+              #end
+              #set($expression = "")
+              #if($sets.size() > 0)
+              #set($expression = "SET $sets.join(', ')")
+              #end
+              #if($removes.size() > 0)
+              #if($expression.length() > 0)
+              #set($expression = "$expression REMOVE $removes.join(', ')")
+              #else
+              #set($expression = "REMOVE $removes.join(', ')")
+              #end
+              #end
+              "expression": $expression,
+              "expressionNames": $expressionNames,
+              "expressionValues": $util.dynamodb.toMapValuesJson($expValues)
+            }
+          }
+        
+        ## Response mapping template
+        #if($ctx.result.error)
+          $util.appendError($ctx.result.error.message, $ctx.result.error.type)
+          #end
+          $util.toJson($ctx.result)
+      ResponseMappingTemplate: |
+        $util.toJson($context.result)
