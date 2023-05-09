@@ -1,6 +1,6 @@
-# vue_todos_aws_runtime_app
+## Cloud Formation stack file is in root /stack.yaml
 
-## Project setup
+## Project Frontend setup
 ```
 npm install
 ```
@@ -20,5 +20,5 @@ npm run build
 npm run lint
 ```
 
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
+
+
